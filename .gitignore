@@ -1,0 +1,5 @@
+tmp
+
+*.rest
+*.sqlite
+*.sqlite-journal
