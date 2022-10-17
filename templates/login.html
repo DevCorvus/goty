@@ -16,6 +16,11 @@
         <a href="/register">Register</a>
       </li>
     </nav>
+    {{ if .Message }}
+    <br />
+    <span style="color: green">{{ .Message }}</span>
+    <br />
+    {{ end }}
     <br />
     <form action="/login" method="POST">
       <div>
@@ -26,6 +31,7 @@
           name="username"
           id="username"
           placeholder="Username"
+          value="{{ if .Username }}{{ .Username }}{{ end }}"
         />
       </div>
       <br />
