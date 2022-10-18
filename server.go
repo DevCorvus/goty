@@ -85,18 +85,12 @@ func registerHandler(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		user, err := userRepository.GetByUsername(username)
-		if err != nil {
-			w.WriteHeader(http.StatusInternalServerError)
-			t := parseTemplate("register.html")
-			t.Execute(w, resData{Error: ErrInternal})
-			return
-		}
-		if user.ID != 0 {
+		if user := userRepository.GetByUsername(username); user.ID != 0 {
 			w.WriteHeader(http.StatusConflict)
 			t := parseTemplate("register.html")
 			t.Execute(w, resData{Error: "Username already exists"})
 			return
+
 		}
 
 		if _, err := userRepository.Create(User{Username: username, Password: password}); err != nil {
@@ -234,14 +228,14 @@ func (r *UserRepository) Create(user User) (*User, error) {
 	return &user, nil
 }
 
-func (r *UserRepository) GetByUsername(username string) (*User, error) {
+func (r *UserRepository) GetByUsername(username string) *User {
 	// For some reason, db.Exec doesn't always return RowsAffected correctly
 	row := r.db.QueryRow("SELECT * FROM users WHERE username = ?", username)
 
 	var user User
-	err := row.Scan(&user.ID, &user.Username, &user.Password, &user.CreatedAt)
+	row.Scan(&user.ID, &user.Username, &user.Password, &user.CreatedAt)
 
-	return &user, err
+	return &user
 }
 
 func initializeDatabase() *sql.DB {
