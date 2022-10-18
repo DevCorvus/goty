@@ -1,16 +1,27 @@
 package main
 
 import (
+	"database/sql"
 	"fmt"
 	"html/template"
 	"log"
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
+	"time"
+
+	_ "github.com/mattn/go-sqlite3"
 )
 
-var staticPath = "./static"
-var templatesPath = "./templates"
+var (
+	ErrInternal = "Something went wrong"
+
+	staticPath    = "./static"
+	templatesPath = "./templates"
+
+	userRepository UserRepository
+)
 
 type resData struct {
 	Username string
@@ -27,12 +38,14 @@ func registerHandler(w http.ResponseWriter, r *http.Request) {
 	case "POST":
 		if err := r.ParseForm(); err != nil {
 			w.WriteHeader(http.StatusInternalServerError)
+			t := parseTemplate("register.html")
+			t.Execute(w, resData{Error: ErrInternal})
 			return
 		}
 
-		username := r.FormValue("username")
-		password := r.FormValue("password")
-		passwordConfirmation := r.FormValue("passwordConfirmation")
+		username := strings.Trim(r.FormValue("username"), " ")
+		password := strings.Trim(r.FormValue("password"), " ")
+		passwordConfirmation := strings.Trim(r.FormValue("passwordConfirmation"), " ")
 
 		if username == "" {
 			w.WriteHeader(http.StatusBadRequest)
@@ -72,7 +85,26 @@ func registerHandler(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		// TODO: Save new user
+		user, err := userRepository.GetByUsername(username)
+		if err != nil {
+			w.WriteHeader(http.StatusInternalServerError)
+			t := parseTemplate("register.html")
+			t.Execute(w, resData{Error: ErrInternal})
+			return
+		}
+		if user.ID != 0 {
+			w.WriteHeader(http.StatusConflict)
+			t := parseTemplate("register.html")
+			t.Execute(w, resData{Error: "Username already exists"})
+			return
+		}
+
+		if _, err := userRepository.Create(User{Username: username, Password: password}); err != nil {
+			w.WriteHeader(http.StatusInternalServerError)
+			t := parseTemplate("register.html")
+			t.Execute(w, resData{Error: ErrInternal})
+			return
+		}
 
 		url := fmt.Sprintf("/login?register=success&username=%s", username)
 		http.Redirect(w, r, url, http.StatusSeeOther)
@@ -122,7 +154,14 @@ func setupHandlers(mux *http.ServeMux) {
 	})
 }
 
+func parseTemplate(fileName string) *template.Template {
+	return template.Must(template.ParseFiles(filepath.Join(templatesPath, "/", fileName)))
+}
+
 func main() {
+	db := initializeDatabase()
+	defer db.Close()
+
 	listenAddr := getListenAddr()
 
 	mux := http.NewServeMux()
@@ -151,6 +190,78 @@ func getListenAddr() string {
 	return listenAddr
 }
 
-func parseTemplate(fileName string) *template.Template {
-	return template.Must(template.ParseFiles(filepath.Join(templatesPath, "/", fileName)))
+type Repository interface {
+	Migrate() error
+}
+
+type UserRepository struct {
+	db *sql.DB
+}
+
+type User struct {
+	ID        int64
+	Username  string
+	Password  string
+	CreatedAt *time.Time
+}
+
+func (r *UserRepository) Migrate() error {
+	query := `
+	CREATE TABLE IF NOT EXISTS users(
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		username TEXT NOT NULL UNIQUE,
+		password TEXT NOT NULL,
+		created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP NOT NULL
+	);
+	`
+
+	_, err := r.db.Exec(query)
+	return err
+}
+
+func (r *UserRepository) Create(user User) (*User, error) {
+	res, err := r.db.Exec("INSERT INTO users(username, password) VALUES (?, ?)", user.Username, user.Password)
+	if err != nil {
+		return nil, err
+	}
+
+	id, err := res.LastInsertId()
+	if err != nil {
+		return nil, err
+	}
+	user.ID = id
+
+	return &user, nil
+}
+
+func (r *UserRepository) GetByUsername(username string) (*User, error) {
+	// For some reason, db.Exec doesn't always return RowsAffected correctly
+	row := r.db.QueryRow("SELECT * FROM users WHERE username = ?", username)
+
+	var user User
+	err := row.Scan(&user.ID, &user.Username, &user.Password, &user.CreatedAt)
+
+	return &user, err
+}
+
+func initializeDatabase() *sql.DB {
+	db, err := sql.Open("sqlite3", "db.sqlite")
+
+	if err != nil {
+		panic(err)
+	}
+
+	userRepository = UserRepository{db: db}
+
+	runMigrations(&userRepository)
+
+	return db
+}
+
+func runMigrations(repos ...Repository) {
+	for _, repo := range repos {
+		if err := repo.Migrate(); err != nil {
+			panic(err)
+		}
+	}
 }
