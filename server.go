@@ -1,10 +1,13 @@
 package main
 
 import (
+	"crypto/sha512"
 	"database/sql"
+	"encoding/hex"
 	"fmt"
 	"html/template"
 	"log"
+	"math/rand"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -90,10 +93,27 @@ func registerHandler(w http.ResponseWriter, r *http.Request) {
 			t := parseTemplate("register.html")
 			t.Execute(w, resData{Error: "Username already exists"})
 			return
-
 		}
 
-		if _, err := userRepository.Create(User{Username: username, Password: password}); err != nil {
+		salt, err := generateSalt(16)
+		if err != nil {
+			w.WriteHeader(http.StatusInternalServerError)
+			t := parseTemplate("register.html")
+			t.Execute(w, resData{Error: ErrInternal})
+			return
+		}
+
+		hashedPassword, err := hashPassword(password, salt)
+		if err != nil {
+			w.WriteHeader(http.StatusInternalServerError)
+			t := parseTemplate("register.html")
+			t.Execute(w, resData{Error: ErrInternal})
+			return
+		}
+
+		userData := User{Username: username, Password: hashedPassword}
+
+		if _, err := userRepository.Create(userData); err != nil {
 			w.WriteHeader(http.StatusInternalServerError)
 			t := parseTemplate("register.html")
 			t.Execute(w, resData{Error: ErrInternal})
@@ -131,8 +151,26 @@ func loginHandler(w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(http.StatusInternalServerError)
 			return
 		}
-		// TODO: Handle data properly
-		fmt.Fprintf(w, "%v", r.PostForm)
+
+		username := strings.Trim(r.FormValue("username"), " ")
+		password := strings.Trim(r.FormValue("password"), " ")
+
+		user := userRepository.GetByUsername(username)
+
+		doPasswordsMatch, err := user.ComparePassword(password)
+		if err != nil {
+			w.WriteHeader(http.StatusInternalServerError)
+			t := parseTemplate("login.html")
+			t.Execute(w, resData{Error: ErrInternal})
+			return
+		}
+
+		if doPasswordsMatch {
+			fmt.Fprintf(w, "Success")
+		} else {
+			w.WriteHeader(http.StatusUnauthorized)
+			fmt.Fprintf(w, "Failure")
+		}
 
 	default:
 		w.WriteHeader(http.StatusMethodNotAllowed)
@@ -188,15 +226,31 @@ type Repository interface {
 	Migrate() error
 }
 
-type UserRepository struct {
-	db *sql.DB
-}
-
 type User struct {
 	ID        int64
 	Username  string
 	Password  string
 	CreatedAt *time.Time
+}
+
+func (user *User) ComparePassword(password string) (bool, error) {
+	userPassword := strings.Split(user.Password, ":")
+
+	salt, err := hex.DecodeString(userPassword[0])
+	if err != nil {
+		return false, err
+	}
+
+	hashedPassword, err := hashPassword(password, salt)
+	if err != nil {
+		return false, err
+	}
+
+	return user.Password == hashedPassword, nil
+}
+
+type UserRepository struct {
+	db *sql.DB
 }
 
 func (r *UserRepository) Migrate() error {
@@ -258,4 +312,33 @@ func runMigrations(repos ...Repository) {
 			panic(err)
 		}
 	}
+}
+
+func generateSalt(saltSize int) ([]byte, error) {
+	var salt = make([]byte, saltSize)
+
+	if _, err := rand.Read(salt); err != nil {
+		return nil, err
+	}
+
+	return salt, nil
+}
+
+// Don't use a manual hashing method (It's not safe). Instead, use something like bcrypt
+func hashPassword(password string, salt []byte) (string, error) {
+	passwordBytes := []byte(password)
+	passwordBytesWithSalt := append(passwordBytes, salt...)
+
+	sha512Hasher := sha512.New()
+
+	if _, err := sha512Hasher.Write(passwordBytesWithSalt); err != nil {
+		return "", err
+	}
+
+	hashedPasswordBytes := sha512Hasher.Sum(nil)
+
+	saltHex := hex.EncodeToString(salt)
+	hashedPasswordHex := hex.EncodeToString(hashedPasswordBytes)
+
+	return saltHex + ":" + hashedPasswordHex, nil
 }

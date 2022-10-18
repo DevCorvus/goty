@@ -48,5 +48,9 @@
       <br />
       <button type="submit">Submit</button>
     </form>
+    {{ if .Error }}
+    <br />
+    <span style="color: red">{{ .Error }}</span>
+    {{ end }}
   </body>
 </html>
