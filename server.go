@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -156,6 +157,12 @@ func loginHandler(w http.ResponseWriter, r *http.Request) {
 		password := strings.Trim(r.FormValue("password"), " ")
 
 		user := userRepository.GetByUsername(username)
+		if user.ID == 0 {
+			w.WriteHeader(http.StatusUnauthorized)
+			t := parseTemplate("login.html")
+			t.Execute(w, resData{Error: "Username or Password incorrect"})
+			return
+		}
 
 		doPasswordsMatch, err := user.ComparePassword(password)
 		if err != nil {
@@ -165,12 +172,56 @@ func loginHandler(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		if doPasswordsMatch {
-			fmt.Fprintf(w, "Success")
-		} else {
+		if !doPasswordsMatch {
 			w.WriteHeader(http.StatusUnauthorized)
-			fmt.Fprintf(w, "Failure")
+			t := parseTemplate("login.html")
+			t.Execute(w, resData{Error: "Username or Password incorrect"})
+			return
 		}
+
+		cookie := http.Cookie{
+			Name:     "session",
+			Path:     "/",
+			Value:    strconv.FormatInt(user.ID, 10),
+			Secure:   false,
+			HttpOnly: true,
+			Expires:  time.Now().Add(time.Hour),
+		}
+
+		// TODO: Encrypt and sign cookie
+		http.SetCookie(w, &cookie)
+		http.Redirect(w, r, "/games", http.StatusSeeOther)
+
+	default:
+		w.WriteHeader(http.StatusMethodNotAllowed)
+	}
+}
+
+func logoutHandler(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case "POST":
+		cookie := http.Cookie{
+			Name:     "session",
+			Path:     "/",
+			Value:    "",
+			Secure:   false,
+			HttpOnly: true,
+			Expires:  time.Unix(0, 0),
+		}
+
+		http.SetCookie(w, &cookie)
+		http.Redirect(w, r, "/", http.StatusSeeOther)
+
+	default:
+		w.WriteHeader(http.StatusMethodNotAllowed)
+	}
+}
+
+func gamesHandler(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case "GET":
+		t := parseTemplate("games.html")
+		t.Execute(w, resData{})
 
 	default:
 		w.WriteHeader(http.StatusMethodNotAllowed)
@@ -178,8 +229,13 @@ func loginHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func setupHandlers(mux *http.ServeMux) {
-	mux.HandleFunc("/register", registerHandler)
-	mux.HandleFunc("/login", loginHandler)
+	mux.HandleFunc("/", userIsNotAuthenticated(func(w http.ResponseWriter, r *http.Request) {
+		http.ServeFile(w, r, filepath.Join(staticPath, "/index.html"))
+	}))
+	mux.HandleFunc("/register", userIsNotAuthenticated(registerHandler))
+	mux.HandleFunc("/login", userIsNotAuthenticated(loginHandler))
+	mux.HandleFunc("/logout", userIsAuthenticated(logoutHandler))
+	mux.HandleFunc("/games", userIsAuthenticated(gamesHandler))
 
 	mux.HandleFunc("/healthcheck", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
@@ -199,7 +255,7 @@ func main() {
 	mux := http.NewServeMux()
 
 	fileServer := http.FileServer(http.Dir(staticPath))
-	mux.Handle("/", fileServer)
+	mux.Handle("/static/", http.StripPrefix("/static", fileServer))
 
 	setupHandlers(mux)
 
@@ -292,6 +348,15 @@ func (r *UserRepository) GetByUsername(username string) *User {
 	return &user
 }
 
+func (r *UserRepository) GetById(id string) *User {
+	row := r.db.QueryRow("SELECT * FROM users WHERE id = ?", id)
+
+	var user User
+	row.Scan(&user.ID, &user.Username, &user.Password, &user.CreatedAt)
+
+	return &user
+}
+
 func initializeDatabase() *sql.DB {
 	db, err := sql.Open("sqlite3", "db.sqlite")
 
@@ -341,4 +406,32 @@ func hashPassword(password string, salt []byte) (string, error) {
 	hashedPasswordHex := hex.EncodeToString(hashedPasswordBytes)
 
 	return saltHex + ":" + hashedPasswordHex, nil
+}
+
+func userIsAuthenticated(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		cookie, err := r.Cookie("session")
+		if err != nil {
+			http.Redirect(w, r, "/login", http.StatusSeeOther)
+			return
+		}
+
+		if user := userRepository.GetById(cookie.Value); user.ID == 0 {
+			http.Redirect(w, r, "/login", http.StatusSeeOther)
+			return
+		}
+
+		next(w, r)
+	}
+}
+
+func userIsNotAuthenticated(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if _, err := r.Cookie("session"); err == nil {
+			http.Redirect(w, r, "/games", http.StatusSeeOther)
+			return
+		}
+
+		next(w, r)
+	}
 }
