@@ -1,8 +1,11 @@
 package main
 
 import (
+	"crypto/aes"
+	"crypto/cipher"
 	"crypto/sha512"
 	"database/sql"
+	"encoding/base64"
 	"encoding/hex"
 	"fmt"
 	"html/template"
@@ -23,6 +26,9 @@ var (
 
 	staticPath    = "./static"
 	templatesPath = "./templates"
+
+	// This should not be in source code
+	cookieSecret = "super-secret-value-with-32-bytes"
 
 	userRepository UserRepository
 )
@@ -179,17 +185,13 @@ func loginHandler(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		cookie := http.Cookie{
-			Name:     "session",
-			Path:     "/",
-			Value:    strconv.FormatInt(user.ID, 10),
-			Secure:   false,
-			HttpOnly: true,
-			Expires:  time.Now().Add(time.Hour),
+		if err := attachSessionCookie(w, user.ID); err != nil {
+			w.WriteHeader(http.StatusInternalServerError)
+			t := parseTemplate("login.html")
+			t.Execute(w, resData{Error: ErrInternal})
+			return
 		}
 
-		// TODO: Encrypt and sign cookie
-		http.SetCookie(w, &cookie)
 		http.Redirect(w, r, "/games", http.StatusSeeOther)
 
 	default:
@@ -200,16 +202,7 @@ func loginHandler(w http.ResponseWriter, r *http.Request) {
 func logoutHandler(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case "POST":
-		cookie := http.Cookie{
-			Name:     "session",
-			Path:     "/",
-			Value:    "",
-			Secure:   false,
-			HttpOnly: true,
-			Expires:  time.Unix(0, 0),
-		}
-
-		http.SetCookie(w, &cookie)
+		detachSessionCookie(w)
 		http.Redirect(w, r, "/", http.StatusSeeOther)
 
 	default:
@@ -408,6 +401,93 @@ func hashPassword(password string, salt []byte) (string, error) {
 	return saltHex + ":" + hashedPasswordHex, nil
 }
 
+func encodeBase64(b []byte) string {
+	return base64.StdEncoding.EncodeToString(b)
+}
+
+func decodeBase64(s string) ([]byte, error) {
+	return base64.StdEncoding.DecodeString(s)
+}
+
+// Another unsafe implementation (Don't do this yourself)
+// FIXME: This doesn’t work as expected (probably because I’m dumb)
+func encryptAES_GCM(secret, value string) (string, error) {
+	block, err := aes.NewCipher([]byte(secret))
+	if err != nil {
+		return "", err
+	}
+
+	aesGCM, err := cipher.NewGCM(block)
+	if err != nil {
+		return "", err
+	}
+
+	nonce := make([]byte, aesGCM.NonceSize())
+	ciphertext := aesGCM.Seal(nonce, nonce, []byte(value), nil)
+
+	return encodeBase64(ciphertext), nil
+}
+
+func decryptAES_GCM(secret, value string) (string, error) {
+	ciphertext, err := decodeBase64(value)
+	if err != nil {
+		return "", err
+	}
+
+	block, err := aes.NewCipher([]byte(secret))
+	if err != nil {
+		return "", err
+	}
+
+	aesGCM, err := cipher.NewGCM(block)
+	if err != nil {
+		return "", err
+	}
+
+	nonceSize := aesGCM.NonceSize()
+	nonce, ciphertext := ciphertext[:nonceSize], ciphertext[nonceSize:]
+
+	plaintext, err := aesGCM.Open(nil, nonce, ciphertext, nil)
+	if err != nil {
+		return "", err
+	}
+
+	return string(plaintext), nil
+}
+
+func attachSessionCookie(w http.ResponseWriter, id int64) error {
+	userId := strconv.FormatInt(id, 10)
+	userIdEncrypted, err := encryptAES_GCM(cookieSecret, userId)
+	if err != nil {
+		return err
+	}
+
+	cookie := http.Cookie{
+		Name:     "session",
+		Path:     "/",
+		Value:    userIdEncrypted,
+		Secure:   false,
+		HttpOnly: true,
+		Expires:  time.Now().Add(time.Hour),
+	}
+
+	http.SetCookie(w, &cookie)
+	return nil
+}
+
+func detachSessionCookie(w http.ResponseWriter) {
+	cookie := http.Cookie{
+		Name:     "session",
+		Path:     "/",
+		Value:    "",
+		Secure:   false,
+		HttpOnly: true,
+		Expires:  time.Unix(0, 0),
+	}
+
+	http.SetCookie(w, &cookie)
+}
+
 func userIsAuthenticated(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		cookie, err := r.Cookie("session")
@@ -416,7 +496,15 @@ func userIsAuthenticated(next http.HandlerFunc) http.HandlerFunc {
 			return
 		}
 
-		if user := userRepository.GetById(cookie.Value); user.ID == 0 {
+		userId, err := decryptAES_GCM(cookieSecret, cookie.Value)
+		if err != nil {
+			detachSessionCookie(w)
+			http.Redirect(w, r, "/login", http.StatusSeeOther)
+			return
+		}
+
+		if user := userRepository.GetById(userId); user.ID == 0 {
+			detachSessionCookie(w)
 			http.Redirect(w, r, "/login", http.StatusSeeOther)
 			return
 		}
