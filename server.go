@@ -409,9 +409,8 @@ func decodeBase64(s string) ([]byte, error) {
 	return base64.StdEncoding.DecodeString(s)
 }
 
-// Another unsafe implementation (Don't do this yourself)
-// FIXME: This doesn’t work as expected (probably because I’m dumb)
-func encryptAES_GCM(secret, value string) (string, error) {
+// Another unsafe implementation (Don't do this by yourself)
+func AES_GCM_Encrypt(secret, value string) (string, error) {
 	block, err := aes.NewCipher([]byte(secret))
 	if err != nil {
 		return "", err
@@ -432,7 +431,7 @@ func encryptAES_GCM(secret, value string) (string, error) {
 	return encodeBase64(ciphertext), nil
 }
 
-func decryptAES_GCM(secret, value string) (string, error) {
+func AES_GCM_Decrypt(secret, value string) (string, error) {
 	ciphertext, err := decodeBase64(value)
 	if err != nil {
 		return "", err
@@ -461,7 +460,7 @@ func decryptAES_GCM(secret, value string) (string, error) {
 
 func attachSessionCookie(w http.ResponseWriter, id int64) error {
 	userId := strconv.FormatInt(id, 10)
-	userIdEncrypted, err := encryptAES_GCM(cookieSecret, userId)
+	userIdEncrypted, err := AES_GCM_Encrypt(cookieSecret, userId)
 	if err != nil {
 		return err
 	}
@@ -500,7 +499,7 @@ func userIsAuthenticated(next http.HandlerFunc) http.HandlerFunc {
 			return
 		}
 
-		userId, err := decryptAES_GCM(cookieSecret, cookie.Value)
+		userId, err := AES_GCM_Decrypt(cookieSecret, cookie.Value)
 		if err != nil {
 			detachSessionCookie(w)
 			http.Redirect(w, r, "/login", http.StatusSeeOther)
