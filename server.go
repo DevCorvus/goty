@@ -423,6 +423,10 @@ func encryptAES_GCM(secret, value string) (string, error) {
 	}
 
 	nonce := make([]byte, aesGCM.NonceSize())
+	if _, err := rand.Read(nonce); err != nil {
+		return "", err
+	}
+
 	ciphertext := aesGCM.Seal(nonce, nonce, []byte(value), nil)
 
 	return encodeBase64(ciphertext), nil
