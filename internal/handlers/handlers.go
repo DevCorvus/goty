@@ -29,7 +29,7 @@ func Setup(mux *http.ServeMux) {
 	mux.HandleFunc("/register", auth.UserIsNotAuthenticated(register))
 	mux.HandleFunc("/login", auth.UserIsNotAuthenticated(login))
 	mux.HandleFunc("/logout", auth.UserIsAuthenticated(logout))
-	mux.HandleFunc("/games", auth.UserIsAuthenticated(games))
+	mux.HandleFunc("/videogames", auth.UserIsAuthenticated(videogames))
 
 	mux.HandleFunc("/healthcheck", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
@@ -189,7 +189,7 @@ func login(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		http.Redirect(w, r, "/games", http.StatusSeeOther)
+		http.Redirect(w, r, "/videogames", http.StatusSeeOther)
 
 	default:
 		w.WriteHeader(http.StatusMethodNotAllowed)
@@ -207,10 +207,10 @@ func logout(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func games(w http.ResponseWriter, r *http.Request) {
+func videogames(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case "GET":
-		t := parseTemplate("games.html")
+		t := parseTemplate("videogames.html")
 		t.Execute(w, resData{})
 
 	default:

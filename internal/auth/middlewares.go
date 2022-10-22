@@ -36,7 +36,7 @@ func UserIsAuthenticated(next http.HandlerFunc) http.HandlerFunc {
 func UserIsNotAuthenticated(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if _, err := r.Cookie("session"); err == nil {
-			http.Redirect(w, r, "/games", http.StatusSeeOther)
+			http.Redirect(w, r, "/videogames", http.StatusSeeOther)
 			return
 		}
 
