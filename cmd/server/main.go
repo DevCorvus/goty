@@ -26,7 +26,7 @@ func main() {
 	handlers.Setup(mux)
 
 	fmt.Printf("Listening... http://localhost%s\n", listenAddr)
-	if err := http.ListenAndServe(listenAddr, mux); err != nil {
+	if err := http.ListenAndServe("localhost"+listenAddr, mux); err != nil {
 		log.Fatal(err)
 	}
 }
